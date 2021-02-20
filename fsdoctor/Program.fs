@@ -14,8 +14,11 @@ open System.Text
 
 module String =
     let join (sep:string) (input: string seq) = System.String.Join(sep, input)
-
-type Eval() =
+type FSIResult =
+    | Ok of string option
+    | CompileError of string
+    | ThrownException of Exception
+type Fsi() =
     // Initialize output and input streams
     let sbOut = new StringBuilder()
     let sbErr = new StringBuilder()
@@ -35,47 +38,74 @@ type Eval() =
       match fsiSession.EvalExpressionNonThrowing(text) with
       | Choice1Of2 (Some value), diag when value.ReflectionValue <> null -> sprintf "%A" value.ReflectionValue |> Some |> Ok
       | Choice1Of2 (_), diag -> None |> Ok
-      | Choice2Of2 (:? FsiCompilationException as exn), diag -> sprintf "Compile error: %s" (diag.[0].ToString()) |> Error
-      | Choice2Of2 exn, diag -> sprintf "Exception: %A Diagnostic: %A" exn diag |> Error
-
-    evalExpression """2+1+"""
+      | Choice2Of2 (:? FsiCompilationException as exn), diag -> (diag.[0].ToString()) |> CompileError
+      | Choice2Of2 exn, diag -> ThrownException exn
+    member _.eval = evalExpression
 
 // Define a function to construct a message to print
-let getLine() =
+let getLine(fsi:Fsi) =
     let backspace (accum: string) =
         let accum' = (accum.Substring(0, max 0 (accum.Length-1)))
-        let struct (x, y) = Console.GetCursorPosition()
-        Console.SetCursorPosition(0, y)
-        Console.Write ((accum') + " \b")
         accum'
     let append (txt: string) (accum: string) =
         Console.Write txt
         accum + txt
-
-    let rec recur (accum: string) =
-        let c = Console.ReadKey()
+    let eval txt =
+        match fsi.eval txt with
+        | Ok (Some txt) -> $" // evaluates to {txt}"
+        | Ok (None) -> $" // evaluates to nothing"
+        | CompileError msg -> $" // won't compile"
+        | ThrownException exn -> $" // throws exception"
+    let rec recur (accum: string list) =
+        let c = Console.ReadKey(true)
+        let print (next: string) =
+            let struct (x, y) = Console.GetCursorPosition()
+            Console.SetCursorPosition(0, y)
+            printf "%s" next
+            if next.Length < x then
+                // need to delete
+                printf "%s" (String.replicate (x - next.Length) " ")
+                Console.SetCursorPosition(next.Length, y)
+        let undo() =
+            match accum with
+            | [_] | [] as lst -> recur lst
+            | _::t ->
+                print t.Head
+                recur t
+        let fst = accum.Head
+        let printAndRecur next =
+            print next
+            recur ([next]@accum)
         match c.Key with
         | ConsoleKey.Enter ->
             Console.WriteLine ""
-            accum
+            fst
+        | ConsoleKey.Escape ->
+            undo()
+        | ConsoleKey.Backspace | ConsoleKey.Z when (c.Modifiers &&& ConsoleModifiers.Control |> int) <> 0 ->
+            undo()
         | ConsoleKey.Backspace ->
-            accum
+            fst
             |> backspace
-            |> recur
+            |> printAndRecur
         | ConsoleKey.Tab ->
-            (accum + "\t")
-            |> backspace
-            |> append (accum.Trim())
-            |> recur
+            fst
+            |> append (fst |> eval)
+            |> printAndRecur
         | _ ->
             let k = c.KeyChar
-            (accum + k.ToString())
-            |> recur
-    recur ""
+            (fst + k.ToString())
+            |> printAndRecur
+    recur [""]
 
 [<EntryPoint>]
 let main argv =
+    printfn "Initializing fsi.exe..."
+    let fsi = Fsi()
+    fsi.eval "1+1" |> ignore // make sure it's awake
     printfn "Enter data"
-    printfn "Hello world %A" (getLine())
-
+    let mutable resp = (getLine(fsi))
+    while resp <> "q" && resp <> "quit" do
+        printfn "%s" resp
+        resp <- getLine(fsi)
     0 // return an integer exit code
