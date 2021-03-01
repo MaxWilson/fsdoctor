@@ -19,25 +19,34 @@ module String =
 
 #nowarn "40" // We're not doing anything crazy like calling higher-order arguments during ctor execution, don't need the warning
 module Parse =
-    let rec (|OptionalParens|_|) = pack <| function
-        | Str "(" (OptionalParens(nest, Str ")" rest)) -> Some(nest, rest)
-        | CharsExcept (Set.ofList ['('; ')']) (txt, rest) -> Some(txt, rest)
+    let (|WSStr|_|) input = (|OWS|) >> (|Str|_|) input
+    let rec (|OptionalParensNoTuples|_|) = pack <| function
+        | WSStr "(" (OptionalParensNoTuples((), WSStr ")" (OptionalParensNoTuples((), rest)))) -> Some((), rest)
+        | WSStr "(" (OptionalParensNoTuples(v, WSStr ")" rest)) -> Some(v, rest)
+        | CharsExcept (Set.ofList ['('; ')'; ',']) (txt, rest) -> Some((), rest)
         | _ -> None
-
-    let rec (|NestedParens|_|) = pack <| function
-        | Str "(" (OptionalParens(nest, Str ")" rest)) -> Some(nest, rest)
+    let rec (|OptionalParens|_|) = pack <| function
+    | WSStr "(" (OptionalParens((), WSStr ")" (OptionalParens((), rest)))) -> Some((), rest)
+    | WSStr "(" (OptionalParens(v, WSStr ")" rest)) -> Some(v, rest)
+    | CharsExcept (Set.ofList ['('; ')']) (txt, rest) -> Some((), rest)
+    | _ -> None
+    let rec (|Term|_|) = pack <| function
+        | WSStr "(" (OptionalParens(v, WSStr ")" (_, endIx))) & (ctx, beginIx)
+        | OptionalParensNoTuples(v, (_, endIx)) & (ctx, beginIx) ->
+            let arg = ctx.input.Substring(beginIx, endIx - beginIx).Trim()
+            Some(arg, (ctx, endIx))
         | _ -> None
 
     let rec (|ArgList|_|) =
         let (|Arg|_|) = function
-            | (ctx, beginIx) & NestedParens(txt, ((_, endIx) as rest)) ->
-                let arg = ctx.input.Substring(beginIx, endIx - beginIx)
-                Some(arg, rest)
-            | CharsExcept (Set.ofList [','; '(']) (arg, rest) -> Some(arg, rest)
+            | Term(txt, (OWS (Term(txt2, rest)))) ->
+                Some($"{txt} {txt2}", rest)
+            | Term(txt, rest) -> Some(txt, rest)
+            //| CharsExcept (Set.ofList [','; '(']) (arg, rest) -> Some(arg, rest)
             | _ -> None
         pack <| function
-            | OWS(Arg(txt, OWS(Char(',', ArgList(lst, rest))))) -> Some(txt::lst, rest)
-            | OWS(Arg(txt, rest)) -> Some([txt], rest)
+            | Arg(txt, OWS(Char(',', ArgList(lst, rest)))) -> Some(txt::lst, rest)
+            | Arg(txt, rest) -> Some([txt], rest)
             | _ -> None
 
 type FSIResult =
@@ -143,7 +152,11 @@ let getLine (ctx: DocumentationContext) =
                 fst |> Eval
         | ConsoleKey.Escape ->
             undo()
-        | ConsoleKey.Backspace | ConsoleKey.Z when (c.Modifiers &&& ConsoleModifiers.Control |> int) <> 0 ->
+        | ConsoleKey.Backspace when (c.Modifiers &&& ConsoleModifiers.Control |> int) <> 0 ->
+            fst
+            |> eraseWord
+            |> printAndRecur
+        | ConsoleKey.Z when (c.Modifiers &&& ConsoleModifiers.Control |> int) <> 0 ->
             undo()
         | ConsoleKey.Backspace ->
             fst
