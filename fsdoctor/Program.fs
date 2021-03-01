@@ -42,20 +42,25 @@ type Fsi() =
       | Choice2Of2 exn, diag -> ThrownException exn
     member _.eval = evalExpression
 
+let fsi = Lazy<Fsi>()
+
+let generateComment txt =
+    match fsi.Value.eval txt with
+    | Ok (Some txt) -> $" // evaluates to {txt}"
+    | Ok (None) -> $" // evaluates to nothing"
+    | CompileError msg -> $" // won't compile"
+    | ThrownException exn -> $" // throws exception"
+
+let autoComplete txt = txt
+
 // Define a function to construct a message to print
-let getLine(fsi:Fsi) =
+let getLine() =
     let backspace (accum: string) =
         let accum' = (accum.Substring(0, max 0 (accum.Length-1)))
         accum'
     let append (txt: string) (accum: string) =
         Console.Write txt
         accum + txt
-    let eval txt =
-        match fsi.eval txt with
-        | Ok (Some txt) -> $" // evaluates to {txt}"
-        | Ok (None) -> $" // evaluates to nothing"
-        | CompileError msg -> $" // won't compile"
-        | ThrownException exn -> $" // throws exception"
     let rec recur (accum: string list) =
         let c = Console.ReadKey(true)
         let print (next: string) =
@@ -78,7 +83,6 @@ let getLine(fsi:Fsi) =
             recur ([next]@accum)
         match c.Key with
         | ConsoleKey.Enter ->
-            Console.WriteLine ""
             fst
         | ConsoleKey.Escape ->
             undo()
@@ -90,7 +94,7 @@ let getLine(fsi:Fsi) =
             |> printAndRecur
         | ConsoleKey.Tab ->
             fst
-            |> append (fst |> eval)
+            |> autoComplete
             |> printAndRecur
         | _ ->
             let k = c.KeyChar
@@ -101,11 +105,10 @@ let getLine(fsi:Fsi) =
 [<EntryPoint>]
 let main argv =
     printfn "Initializing fsi.exe..."
-    let fsi = Fsi()
-    fsi.eval "1+1" |> ignore // make sure it's awake
-    printfn "Enter data"
-    let mutable resp = (getLine(fsi))
+    fsi.Value.eval "1+1" |> ignore // make sure it's awake
+    printfn "Enter an expression"
+    let mutable resp = (getLine())
     while resp <> "q" && resp <> "quit" do
-        printfn "%s" resp
-        resp <- getLine(fsi)
+        printfn "%s" (generateComment resp)
+        resp <- getLine()
     0 // return an integer exit code
