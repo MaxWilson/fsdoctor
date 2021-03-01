@@ -1,10 +1,12 @@
 // Learn more about F# at http://docs.microsoft.com/dotnet/fsharp
 
 open System
-
 #if INTERACTIVE
+#I __SOURCE_DIRECTORY__
+#load "Packrat.fs"
 #r "nuget: FSharp.Compiler.Service, 39.0.0"
 #endif
+open Wilson.Packrat
 open FSharp.Compiler.SourceCodeServices
 open FSharp.Compiler.Interactive.Shell
 
@@ -14,6 +16,30 @@ open System.Text
 
 module String =
     let join (sep:string) (input: string seq) = System.String.Join(sep, input)
+
+#nowarn "40" // We're not doing anything crazy like calling higher-order arguments during ctor execution, don't need the warning
+module Parse =
+    let rec (|OptionalParens|_|) = pack <| function
+        | Str "(" (OptionalParens(nest, Str ")" rest)) -> Some(nest, rest)
+        | CharsExcept (Set.ofList ['('; ')']) (txt, rest) -> Some(txt, rest)
+        | _ -> None
+
+    let rec (|NestedParens|_|) = pack <| function
+        | Str "(" (OptionalParens(nest, Str ")" rest)) -> Some(nest, rest)
+        | _ -> None
+
+    let rec (|ArgList|_|) =
+        let (|Arg|_|) = function
+            | (ctx, beginIx) & NestedParens(txt, ((_, endIx) as rest)) ->
+                let arg = ctx.input.Substring(beginIx, endIx - beginIx)
+                Some(arg, rest)
+            | CharsExcept (Set.ofList [','; '(']) (arg, rest) -> Some(arg, rest)
+            | _ -> None
+        pack <| function
+            | OWS(Arg(txt, OWS(Char(',', ArgList(lst, rest))))) -> Some(txt::lst, rest)
+            | OWS(Arg(txt, rest)) -> Some([txt], rest)
+            | _ -> None
+
 type FSIResult =
     | Ok of string option
     | CompileError of string
@@ -42,7 +68,17 @@ type Fsi() =
       | Choice2Of2 exn, diag -> ThrownException exn
     member _.eval = evalExpression
 
-let fsi = Lazy<Fsi>()
+type DocumentationContext = {
+    apiName: string
+    }
+
+let initMsg = " <<<Initializing fsi.exe...>>>"
+let fsi = Lazy<Fsi>(fun () ->
+    printf "%s" initMsg
+    let v = new Fsi()
+    v.eval "1+1" |> ignore // make sure it's awake
+    v
+    )
 
 let generateComment txt =
     match fsi.Value.eval txt with
@@ -51,13 +87,30 @@ let generateComment txt =
     | CompileError msg -> $" // won't compile"
     | ThrownException exn -> $" // throws exception"
 
-let autoComplete txt = txt
+let autoComplete (ctx: DocumentationContext) (txt: string) =
+    let txt = txt.Trim()
+    match txt |> ParseArgs.Init with
+    | Parse.ArgList(args, End) ->
+        match args with
+        | [arg] -> $"{arg} |> {ctx.apiName}"
+        | [arg1; arg2] -> $"({arg1}, {arg2}) ||> {ctx.apiName}"
+        | [arg1; arg2; arg3] -> $"({arg1}, {arg2}, {arg3}) |||> {ctx.apiName}"
+        | _ -> txt
+    | _ -> txt
 
+type Command =
+    | Eval of string
+    | Quit
 // Define a function to construct a message to print
-let getLine() =
+let getLine (ctx: DocumentationContext) =
     let backspace (accum: string) =
         let accum' = (accum.Substring(0, max 0 (accum.Length-1)))
         accum'
+    let eraseWord (accum: string) =
+        let accum = accum.Trim()
+        match accum.LastIndexOf(' ') with
+        | -1 -> ""
+        | n -> accum.Substring(0, n).Trim()
     let append (txt: string) (accum: string) =
         Console.Write txt
         accum + txt
@@ -83,7 +136,11 @@ let getLine() =
             recur ([next]@accum)
         match c.Key with
         | ConsoleKey.Enter ->
-            fst
+            match fst with
+            | "q" | "quit"  -> Quit
+            | v when String.IsNullOrWhiteSpace v -> Quit
+            | _ ->
+                fst |> Eval
         | ConsoleKey.Escape ->
             undo()
         | ConsoleKey.Backspace | ConsoleKey.Z when (c.Modifiers &&& ConsoleModifiers.Control |> int) <> 0 ->
@@ -94,7 +151,7 @@ let getLine() =
             |> printAndRecur
         | ConsoleKey.Tab ->
             fst
-            |> autoComplete
+            |> autoComplete ctx
             |> printAndRecur
         | _ ->
             let k = c.KeyChar
@@ -104,11 +161,35 @@ let getLine() =
 
 [<EntryPoint>]
 let main argv =
-    printfn "Initializing fsi.exe..."
-    fsi.Value.eval "1+1" |> ignore // make sure it's awake
-    printfn "Enter an expression"
-    let mutable resp = (getLine())
-    while resp <> "q" && resp <> "quit" do
-        printfn "%s" (generateComment resp)
-        resp <- getLine()
+    let rec api prompt =
+        match prompt() with
+        | None -> ()
+        | Some v when String.IsNullOrWhiteSpace v -> api prompt
+        | Some apiName ->
+            let ctx = { apiName = apiName }
+            let rec examples prompt =
+                match prompt() with
+                | Quit -> []
+                | Eval expr ->
+                    // remember position in case we need to wipe out init message from lazy init, during generateComment
+                    let struct (x, y) = Console.GetCursorPosition()
+
+                    let comment = generateComment expr
+
+                    if Console.GetCursorPosition() <> (x,y) then
+                        let struct (x', y') = Console.GetCursorPosition()
+                        Console.SetCursorPosition(x, y)
+                        Console.Write (String.replicate (initMsg.Length) " ")
+                        Console.SetCursorPosition(x, y)
+                    printfn "%s" comment
+                    (expr, comment)::(examples prompt)
+            let examples = examples (fun _ -> getLine ctx)
+            api prompt
+    let apiPrompt() =
+        printfn "Enter an API name"
+        match Console.ReadLine() with
+        | "q" | "quit" -> None
+        | v -> Some v
+    api apiPrompt
+
     0 // return an integer exit code
