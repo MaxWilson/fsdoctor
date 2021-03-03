@@ -20,19 +20,19 @@ module String =
 #nowarn "40" // We're not doing anything crazy like calling higher-order arguments during ctor execution, don't need the warning
 module Parse =
     let (|WSStr|_|) input = (|OWS|) >> (|Str|_|) input
-    let rec (|OptionalParensNoTuples|_|) = pack <| function
-        | WSStr "(" (OptionalParensNoTuples((), WSStr ")" (OptionalParensNoTuples((), rest)))) -> Some((), rest)
-        | WSStr "(" (OptionalParensNoTuples(v, WSStr ")" rest)) -> Some(v, rest)
+    let rec (|OptionalParens|_|) = pack <| function
+        | WSStr "(" (OptionalParens((), WSStr ")" (OptionalParens((), rest)))) -> Some((), rest)
+        | WSStr "(" (OptionalParens(v, WSStr ")" rest)) -> Some(v, rest)
+        | CharsExcept (Set.ofList ['('; ')']) (txt, rest) -> Some((), rest)
+        | _ -> None
+    let rec (|FunctionApplications|_|) = pack <| function
+        | WSStr "(" (OptionalParens((), WSStr ")" (FunctionApplications((), rest)))) -> Some((), rest)
+        | WSStr "(" (OptionalParens(v, WSStr ")" rest)) -> Some(v, rest)
         | CharsExcept (Set.ofList ['('; ')'; ',']) (txt, rest) -> Some((), rest)
         | _ -> None
-    let rec (|OptionalParens|_|) = pack <| function
-    | WSStr "(" (OptionalParens((), WSStr ")" (OptionalParens((), rest)))) -> Some((), rest)
-    | WSStr "(" (OptionalParens(v, WSStr ")" rest)) -> Some(v, rest)
-    | CharsExcept (Set.ofList ['('; ')']) (txt, rest) -> Some((), rest)
-    | _ -> None
     let rec (|Term|_|) = pack <| function
         | WSStr "(" (OptionalParens(v, WSStr ")" (_, endIx))) & (ctx, beginIx)
-        | OptionalParensNoTuples(v, (_, endIx)) & (ctx, beginIx) ->
+        | FunctionApplications(v, (_, endIx)) & (ctx, beginIx) ->
             let arg = ctx.input.Substring(beginIx, endIx - beginIx).Trim()
             Some(arg, (ctx, endIx))
         | _ -> None
