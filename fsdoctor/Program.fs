@@ -172,6 +172,51 @@ let getLine (ctx: DocumentationContext) =
             |> printAndRecur
     recur [""]
 
+let rec examples prompt =
+    match prompt() with
+    | Quit -> []
+    | Eval expr ->
+        // remember position in case we need to wipe out init message from lazy init, during generateComment
+        let struct (x, y) = Console.GetCursorPosition()
+
+        let comment = generateComment expr
+
+        if Console.GetCursorPosition() <> (x,y) then
+            let struct (x', y') = Console.GetCursorPosition()
+            Console.SetCursorPosition(x, y)
+            Console.Write (String.replicate (initMsg.Length) " ")
+            Console.SetCursorPosition(x, y)
+        printfn "%s" comment
+        (expr, comment)::(examples prompt)
+
+
+let scanFile filePath =
+    let(|Regex|_|) pattern input =
+        match RegularExpressions.Regex.Match(input, pattern, RegularExpressions.RegexOptions.IgnoreCase) with
+        | m when m.Success ->
+            m.Groups |> Seq.cast<RegularExpressions.Group> |> Seq.skip 1 |> Seq.map (fun g -> g.Value) |> List.ofSeq |> Some
+        | _ -> None
+
+    //let filePath = @"d:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\option.fs"
+    let lines = IO.File.ReadAllLines filePath
+    let modules =
+        lines |> Array.zip [|1..lines.Length|]
+        |> Array.choose (function (n, Regex "module\s+([^ ^=]+)\s*=" [moduleName]) -> Some (n, moduleName) | _ -> None)
+    for (startLineIx, module') in modules do
+        //let startLineIx, module' = 8, "Option"
+        let indent (ix:int) = lines.[ix].ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
+        let startIndent = indent startLineIx
+        // let x = 10
+        let endLineIx =
+            [for x in startLineIx .. (lines.Length - 1) do
+                        if indent x > startIndent || match lines.[x] with Regex "\s+(//.*)?" [_optionalcomment] -> true | _ -> false
+                            then yield x]
+                    @[lines.Length - 1]
+                    |> List.last
+        let moduleLines = lines.[startLineIx..endLineIx]
+        printfn "Module: %s" module'
+        moduleLines |> Array.iter (printfn "%s")
+
 [<EntryPoint>]
 let main argv =
     let rec api prompt =
@@ -180,22 +225,6 @@ let main argv =
         | Some v when String.IsNullOrWhiteSpace v -> api prompt
         | Some apiName ->
             let ctx = { apiName = apiName }
-            let rec examples prompt =
-                match prompt() with
-                | Quit -> []
-                | Eval expr ->
-                    // remember position in case we need to wipe out init message from lazy init, during generateComment
-                    let struct (x, y) = Console.GetCursorPosition()
-
-                    let comment = generateComment expr
-
-                    if Console.GetCursorPosition() <> (x,y) then
-                        let struct (x', y') = Console.GetCursorPosition()
-                        Console.SetCursorPosition(x, y)
-                        Console.Write (String.replicate (initMsg.Length) " ")
-                        Console.SetCursorPosition(x, y)
-                    printfn "%s" comment
-                    (expr, comment)::(examples prompt)
             let examples = examples (fun _ -> getLine ctx)
             api prompt
     let apiPrompt() =
@@ -203,6 +232,10 @@ let main argv =
         match Console.ReadLine() with
         | "q" | "quit" -> None
         | v -> Some v
-    api apiPrompt
-
-    0 // return an integer exit code
+    match argv with
+    | [|fileName|] ->
+        scanFile fileName
+        0
+    | _ ->
+        printfn "Usage: fsdoctor.exe <fsiFilePath>"
+        -1
