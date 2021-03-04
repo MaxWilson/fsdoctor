@@ -1,10 +1,12 @@
 // Learn more about F# at http://docs.microsoft.com/dotnet/fsharp
 
-open System
 #if INTERACTIVE
 #I __SOURCE_DIRECTORY__
 #load "Packrat.fs"
 #r "nuget: FSharp.Compiler.Service, 39.0.0"
+#r "nuget: System.Xml.XDocument, 4.3.0"
+#r "nuget: System.Xml.XPath"
+
 #endif
 open Wilson.Packrat
 open FSharp.Compiler.SourceCodeServices
@@ -13,6 +15,8 @@ open FSharp.Compiler.Interactive.Shell
 open System
 open System.IO
 open System.Text
+open System.Xml.Linq
+open System.Xml.XPath
 
 module String =
     let join (sep:string) (input: string seq) = System.String.Join(sep, input)
@@ -48,6 +52,50 @@ module Parse =
             | Arg(txt, OWS(Char(',', ArgList(lst, rest)))) -> Some(txt::lst, rest)
             | Arg(txt, rest) -> Some([txt], rest)
             | _ -> None
+    let identifierChars = (Set.ofList ['.'; '_'] |> Set.union alphanumeric)
+    let (|Ident|_|) = (|Chars|_|) identifierChars
+    let rec (|DocCommentLine|_|) =
+        let set = (Set.ofSeq ['\r';'\n'])
+        function
+        | WSStr "///" (Any (comment, rest)) ->
+            Some(comment, rest)
+        | _ -> None
+    let rec (|BlankLine|_|) =
+        let set = (Set.ofSeq ['\r';'\n'])
+        function
+            | OWS (End as rest) ->
+                Some((), rest)
+            | _ -> None
+    let rec (|Module|_|) = function
+        | WSStr "module" (Ident (name, rest)) ->
+            Some(name, rest)
+        | _ -> None
+    let rec (|FunctionDeclaration|_|) = function
+            | WSStr "val" (OWS (Optional "inline" (Ident (name, (Any (_, rest)))))) ->
+                Some(name, rest)
+            | _ -> None
+    let rec (|FunctionDefinition|_|) =
+        let (|Prefix|_|) = function
+            | WSStr "let" (OWS (Optional "inline" (Ident (name, rest)))) ->
+                Some(name, rest)
+            | _ -> None
+        let (|MaybeTypeDecl|) =
+            let chars = identifierChars |> Set.union (Set.ofList ['>'; '<'; '['; ']'; ' '; '\''])
+            function
+            | WSStr ":" (Chars chars (_, rest))
+            | rest -> rest
+        let (|Param|_|) = function
+            | WSStr "(" (Ident (name, MaybeTypeDecl (WSStr ")" rest)))
+            | Ident(name, rest) -> Some(name, rest)
+            | _ -> None
+        let rec (|Params|_|) = pack <| function
+            | Param(name, WSStr "," (Params(more, rest))) -> Some(name::more, rest)
+            | Param(name, rest) -> Some([name], rest)
+            | _ -> None
+        function
+        | Prefix(name, Params(parameters, MaybeTypeDecl(WSStr "=" (OWS rest)))) ->
+            Some({| name = name; parameters = parameters |}, rest)
+        | _ -> None
 
 type FSIResult =
     | Ok of string option
@@ -215,7 +263,38 @@ let scanFile filePath =
                     |> List.last
         let moduleLines = lines.[startLineIx..endLineIx]
         printfn "Module: %s" module'
-        moduleLines |> Array.iter (printfn "%s")
+        let rec recur comments lines =
+            match lines with
+            | [] -> ()
+            | line::rest ->
+                match line |> ParseArgs.Init with
+                | Parse.DocCommentLine(comment, End) ->
+                    recur (comments@[comment]) rest
+                | Parse.FunctionDeclaration(funcName, _) ->
+                    let reader = new StringReader """
+<example>
+<code>
+None |> Option.toArray // evaluates to [||]
+Some 42 |> Option.toArray // evaluates to [|42|]
+</code>
+</example>                    """
+                    let comments = []
+                    let addRoot elements= $"<doc>{elements}</doc>"
+                    use reader = new StringReader (comments |> Seq.map (fun s -> s.Trim()) |> String.join "\n" |> addRoot)
+                    let xmlDoc = reader |> System.Xml.Linq.XDocument.Load
+                    let examples =
+                        xmlDoc.XPathSelectElements("//*[local-name()='code']")
+                        |> Seq.map (fun x -> x.Value)
+                    printfn "%s" funcName
+                    for example in examples do
+                        printfn "%s" example
+                    printfn ""
+                    //printfn "%s" (comments |> Seq.map (fun s -> s.Trim()) |> String.join "\n" |> addRoot)
+                    recur [] rest
+                | Parse.BlankLine((), End)
+                | _ ->
+                    recur comments rest
+        recur [] (moduleLines |> List.ofArray)
 
 [<EntryPoint>]
 let main argv =
