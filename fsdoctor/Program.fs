@@ -265,9 +265,9 @@ let scanFile filePath =
             | _ ->
                 recur (modules, module', line::moduleLines, indentLevel) rest
         recur ([], None, [], 0) lines
-    let modules = lines |> List.ofArray |> getModules
+    let modules = lines |> List.ofArray |> getModules |> List.rev
     for module', moduleLines in modules do
-        printfn "%s" module'
+        //let module', moduleLines = modules.[1] |> fst
         let rec recur comments lines =
             match lines with
             | [] -> ()
