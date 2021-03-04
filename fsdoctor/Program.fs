@@ -271,19 +271,11 @@ let scanFile filePath =
                 | Parse.DocCommentLine(comment, End) ->
                     recur (comments@[comment]) rest
                 | Parse.FunctionDeclaration(funcName, _) ->
-                    let reader = new StringReader """
-<example>
-<code>
-None |> Option.toArray // evaluates to [||]
-Some 42 |> Option.toArray // evaluates to [|42|]
-</code>
-</example>                    """
-                    let comments = []
                     let addRoot elements= $"<doc>{elements}</doc>"
-                    use reader = new StringReader (comments |> Seq.map (fun s -> s.Trim()) |> String.join "\n" |> addRoot)
+                    use reader = new StringReader (comments |> Seq.map (fun (s: string) -> s.Trim()) |> String.join "\n" |> addRoot)
                     let xmlDoc = reader |> System.Xml.Linq.XDocument.Load
                     let examples =
-                        xmlDoc.XPathSelectElements("//*[local-name()='code']")
+                        xmlDoc.XPathSelectElements("//example/code")
                         |> Seq.map (fun x -> x.Value)
                     printfn "%s" funcName
                     for example in examples do
