@@ -245,24 +245,29 @@ let scanFile filePath =
             m.Groups |> Seq.cast<RegularExpressions.Group> |> Seq.skip 1 |> Seq.map (fun g -> g.Value) |> List.ofSeq |> Some
         | _ -> None
 
-    //let filePath = @"d:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\option.fs"
+    //let filePath = @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\option.fsi"
     let lines = IO.File.ReadAllLines filePath
-    let modules =
-        lines |> Array.zip [|1..lines.Length|]
-        |> Array.choose (function (n, Regex "module\s+([^ ^=]+)\s*=" [moduleName]) -> Some (n, moduleName) | _ -> None)
-    for (startLineIx, module') in modules do
-        //let startLineIx, module' = 8, "Option"
-        let indent (ix:int) = lines.[ix].ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
-        let startIndent = indent startLineIx
-        // let x = 10
-        let endLineIx =
-            [for x in startLineIx .. (lines.Length - 1) do
-                        if indent x > startIndent || match lines.[x] with Regex "\s+(//.*)?" [_optionalcomment] -> true | _ -> false
-                            then yield x]
-                    @[lines.Length - 1]
-                    |> List.last
-        let moduleLines = lines.[startLineIx..endLineIx]
-        printfn "Module: %s" module'
+    let getModules lines =
+        let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
+        let rec recur (modules, module', moduleLines, indentLevel) = function
+        | [] ->
+            match module' with
+            | None -> modules
+            | Some name -> (name, moduleLines |> List.rev)::modules
+        | line::rest ->
+            match line with
+            | Regex "module\s+([^ ^=]+)\s*=" [moduleName] ->
+                let modules =
+                    match module' with
+                    | None -> modules
+                    | Some name -> (name, moduleLines |> List.rev)::modules
+                recur (modules, Some moduleName, [], indentation line) rest
+            | _ ->
+                recur (modules, module', line::moduleLines, indentLevel) rest
+        recur ([], None, [], 0) lines
+    let modules = lines |> List.ofArray |> getModules
+    for module', moduleLines in modules do
+        printfn "%s" module'
         let rec recur comments lines =
             match lines with
             | [] -> ()
@@ -276,17 +281,16 @@ let scanFile filePath =
                     let xmlDoc = reader |> System.Xml.Linq.XDocument.Load
                     let examples =
                         xmlDoc.XPathSelectElements("//example/code")
-                        |> Seq.map (fun x -> x.Value)
-                    printfn "%s" funcName
+                        |> Seq.collect (fun x -> x.Value.Trim().Split("\n"))
+                        |> Seq.filter (not << String.IsNullOrWhiteSpace)
+                    printfn $"{module'}.{funcName}"
                     for example in examples do
-                        printfn "%s" example
-                    printfn ""
-                    //printfn "%s" (comments |> Seq.map (fun s -> s.Trim()) |> String.join "\n" |> addRoot)
+                        printfn "    %s" (example.Trim())
                     recur [] rest
                 | Parse.BlankLine((), End)
                 | _ ->
                     recur comments rest
-        recur [] (moduleLines |> List.ofArray)
+        recur [] moduleLines
 
 [<EntryPoint>]
 let main argv =
