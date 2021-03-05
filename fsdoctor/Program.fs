@@ -237,6 +237,19 @@ let rec examples prompt =
         printfn "%s" comment
         (expr, comment)::(examples prompt)
 
+let example = """
+/// <summary>Returns true if the option is not None.</summary>
+/// <param name="option">The input option.</param>
+///
+/// <example>
+/// <code>
+///     None |> Option.isSome // evaluates to false
+///     Some 42 |> Option.isSome // evaluates to true
+/// </code>
+/// </example>
+///
+/// <returns>True if the option is not None.</returns>
+"""
 
 let scanFile filePath =
     let(|Regex|_|) pattern input =
@@ -244,9 +257,8 @@ let scanFile filePath =
         | m when m.Success ->
             m.Groups |> Seq.cast<RegularExpressions.Group> |> Seq.skip 1 |> Seq.map (fun g -> g.Value) |> List.ofSeq |> Some
         | _ -> None
-
     //let filePath = @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\option.fsi"
-    let lines = IO.File.ReadAllLines filePath
+    let lines = IO.File.ReadAllLines filePath |> fun lines -> lines |> Array.zip [| 1..lines.Length |]
     let getModules lines =
         let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
         let rec recur (modules, module', moduleLines, indentLevel) = function
@@ -255,7 +267,7 @@ let scanFile filePath =
             | None -> modules
             | Some name -> (name, moduleLines |> List.rev)::modules
             |> List.rev
-        | line::rest ->
+        | (n, line)::rest ->
             match line with
             | Regex "module\s+([^ ^=]+)\s*=" [moduleName] ->
                 let modules =
@@ -264,7 +276,7 @@ let scanFile filePath =
                     | Some name -> (name, moduleLines |> List.rev)::modules
                 recur (modules, Some moduleName, [], indentation line) rest
             | _ ->
-                recur (modules, module', line::moduleLines, indentLevel) rest
+                recur (modules, module', (n, line)::moduleLines, indentLevel) rest
         recur ([], None, [], 0) lines
     let modules = lines |> List.ofArray |> getModules
     for module', moduleLines in modules do
@@ -272,13 +284,17 @@ let scanFile filePath =
         let rec recur comments lines =
             match lines with
             | [] -> ()
-            | line::rest ->
+            | (n,line)::rest ->
                 match line |> ParseArgs.Init with
                 | Parse.DocCommentLine(comment, End) ->
-                    recur (comments@[comment]) rest
+                    recur (comments@[n, comment]) rest
                 | Parse.FunctionDeclaration(funcName, _) ->
                     let addRoot elements= $"<doc>{elements}</doc>"
-                    use reader = new StringReader (comments |> Seq.map (fun (s: string) -> s.Trim()) |> String.join "\n" |> addRoot)
+                    let linePosition =
+                        match comments with
+                        | [] -> n - 1
+
+                    use reader = new StringReader (comments |> Seq.map (fun (_, s: string) -> s.Trim()) |> String.join "\n" |> addRoot)
                     let xmlDoc = reader |> System.Xml.Linq.XDocument.Load
                     let examples =
                         xmlDoc.XPathSelectElements("//example/code")
