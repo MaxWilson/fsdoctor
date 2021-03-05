@@ -317,9 +317,9 @@ let scanFile filePath =
                         let xn = XName.op_Implicit
                         xmlDoc.Root.Add(new XElement(xn "example", new XElement(xn "code", examples |> String.join "\n")))
                     | n -> n.Value <- examples |> String.join "\n"
-                    let xmlCommentLines = xmlDoc.Nodes() |> Seq.collect (fun d -> d.ToString().Split "\n") |> Seq.map (sprintf "/// %s")
+                    let xmlCommentLines = xmlDoc.Nodes() |> Seq.collect (fun d -> d.ToString().Split "\n") |> Seq.map (sprintf "%s/// %s" (String.replicate indent " "))
                     let output =
-                        (xmlCommentLines, [line]) ||> Seq.append |> Seq.map (sprintf "%s%s" (String.replicate indent " "))|> String.join "\n"
+                        (xmlCommentLines, [line]) ||> Seq.append |> String.join "\n"
                     recur [] rest (output::accumOutputRev)
                 | Parse.BlankLine((), End)
                 | _ ->
