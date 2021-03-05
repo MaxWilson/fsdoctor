@@ -54,7 +54,7 @@ module Parse =
             | Arg(txt, rest) -> Some([txt], rest)
             | _ -> None
     let identifierChars = (Set.ofList ['.'; '_'] |> Set.union alphanumeric)
-    let (|Ident|_|) = (|Chars|_|) identifierChars
+    let (|Ident|_|) = (|OWS|) >> (|Chars|_|) identifierChars
     let rec (|DocCommentLine|_|) =
         let set = (Set.ofSeq ['\r';'\n'])
         function
