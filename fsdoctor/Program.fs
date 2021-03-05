@@ -20,6 +20,7 @@ open System.Xml.XPath
 
 module String =
     let join (sep:string) (input: string seq) = System.String.Join(sep, input)
+    let trim (s:string) = s.Trim()
 
 #nowarn "40" // We're not doing anything crazy like calling higher-order arguments during ctor execution, don't need the warning
 module Parse =
@@ -251,63 +252,82 @@ let example = """
 /// <returns>True if the option is not None.</returns>
 """
 
+let getExamples apiName examples =
+    printfn $"{apiName}"
+    for example in examples do
+        printfn "    %s" example
+    printfn "Press ENTER to continue"
+    Console.ReadLine() |> ignore
+    examples
+
 let scanFile filePath =
     let(|Regex|_|) pattern input =
         match RegularExpressions.Regex.Match(input, pattern, RegularExpressions.RegexOptions.IgnoreCase) with
         | m when m.Success ->
             m.Groups |> Seq.cast<RegularExpressions.Group> |> Seq.skip 1 |> Seq.map (fun g -> g.Value) |> List.ofSeq |> Some
         | _ -> None
-    //let filePath = @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\option.fsi"
-    let lines = IO.File.ReadAllLines filePath |> fun lines -> lines |> Array.zip [| 1..lines.Length |]
+    //let filePath = @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\foo.fsi"
+    let output = new StringWriter()
+    let lines = IO.File.ReadAllLines filePath
+    let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
     let getModules lines =
-        let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
         let rec recur (modules, module', moduleLines, indentLevel) = function
         | [] ->
             match module' with
             | None -> modules
             | Some name -> (name, moduleLines |> List.rev)::modules
             |> List.rev
-        | (n, line)::rest ->
+        | line::rest ->
             match line with
             | Regex "module\s+([^ ^=]+)\s*=" [moduleName] ->
                 let modules =
                     match module' with
-                    | None -> modules
+                    | None ->
+                        output.WriteLine(moduleLines |> String.join "\n") // save prelude
+                        modules
                     | Some name -> (name, moduleLines |> List.rev)::modules
                 recur (modules, Some moduleName, [], indentation line) rest
             | _ ->
-                recur (modules, module', (n, line)::moduleLines, indentLevel) rest
+                recur (modules, module', line::moduleLines, indentLevel) rest
         recur ([], None, [], 0) lines
     let modules = lines |> List.ofArray |> getModules
     for module', moduleLines in modules do
-        //let module', moduleLines = modules.[1] |> fst
-        let rec recur comments lines =
-            match lines with
-            | [] -> ()
-            | (n,line)::rest ->
+        // let module', modulesLines = modules.[0]
+        let rec recur comments input accumOutputRev =
+            match input with
+            | [] -> accumOutputRev |> List.rev
+            | line::rest ->
                 match line |> ParseArgs.Init with
                 | Parse.DocCommentLine(comment, End) ->
-                    recur (comments@[n, comment]) rest
+                    recur (comments@[comment]) rest accumOutputRev
                 | Parse.FunctionDeclaration(funcName, _) ->
+                    let indent = indentation line
                     let addRoot elements= $"<doc>{elements}</doc>"
-                    let linePosition =
-                        match comments with
-                        | [] -> n - 1
-                        | _ -> comments |> List.last |> fst
-                    use reader = new StringReader (comments |> Seq.map (fun (_, s: string) -> s.Trim()) |> String.join "\n" |> addRoot)
+                    //use reader = new StringReader (addRoot <| example.Replace(@"///", ""))
+                    use reader = new StringReader (comments |> Seq.map String.trim |> String.join "\n" |> addRoot)
                     let xmlDoc = reader |> System.Xml.Linq.XDocument.Load
                     let examples =
                         xmlDoc.XPathSelectElements("//example/code")
-                        |> Seq.collect (fun x -> x.Value.Trim().Split("\n"))
+                        |> Seq.collect (fun x -> x.Value.Trim().Split("\n") |> Seq.map String.trim)
                         |> Seq.filter (not << String.IsNullOrWhiteSpace)
-                    printfn $"{module'}.{funcName}"
-                    for example in examples do
-                        printfn "    %s" (example.Trim())
-                    recur [] rest
+                        |> List.ofSeq
+                        |> getExamples $"{module'}.{funcName}"
+                    match xmlDoc.XPathSelectElement("//example/code") with
+                    | null ->
+                        let xn = XName.op_Implicit
+                        xmlDoc.Root.Add(new XElement(xn "example", new XElement(xn "code", examples |> String.join "\n")))
+                    | n -> n.Value <- examples |> String.join "\n"
+                    let xmlCommentLines = xmlDoc.Nodes() |> Seq.collect (fun d -> d.ToString().Split "\n") |> Seq.map (sprintf "/// %s")
+                    let output =
+                        (xmlCommentLines, [line]) ||> Seq.append |> Seq.map (sprintf "%s%s" (String.replicate indent " "))|> String.join "\n"
+                    recur [] rest (output::accumOutputRev)
                 | Parse.BlankLine((), End)
                 | _ ->
-                    recur comments rest
-        recur [] moduleLines
+                    recur comments rest (line::accumOutputRev)
+        recur [] moduleLines [] |> List.iter output.WriteLine
+    Console.WriteLine (output.ToString())
+    //File.WriteAllText(filePath, output.ToString())
+
 
 [<EntryPoint>]
 let main argv =
