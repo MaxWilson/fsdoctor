@@ -293,7 +293,7 @@ let scanFile filePath =
                     let linePosition =
                         match comments with
                         | [] -> n - 1
-
+                        | _ -> comments |> List.last |> fst
                     use reader = new StringReader (comments |> Seq.map (fun (_, s: string) -> s.Trim()) |> String.join "\n" |> addRoot)
                     let xmlDoc = reader |> System.Xml.Linq.XDocument.Load
                     let examples =
