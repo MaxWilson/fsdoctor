@@ -267,7 +267,14 @@ type Element =
     | Module of name: string * line: Line * contents: Element list
 let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
 let parseLines (lines: string list) =
-    let rec recur (ordinal, indent: int option) =
+    let (|BlankOrComment|_|) ordinal s =
+        match s |> ParseArgs.Init with
+        | Parse.BlankLine((), End)
+        | Parse.DocCommentLine(_, End) ->
+                Some(Line { indent = None; txt = s; ordinal = ordinal })
+        | _ -> None
+
+    let rec (|Recur|_|) (ordinal, indent: int option) =
         match lines with
         | [] -> []
         | s::rest ->
