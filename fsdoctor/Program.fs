@@ -260,6 +260,36 @@ let getExamples apiName examples =
     Console.ReadLine() |> ignore
     examples
 
+open Parse
+type Line = { indent: int option; txt: string; ordinal: int }
+type Element =
+    | Line of Line
+    | Module of name: string * line: Line * contents: Element list
+let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
+let rec parseLines ordinal (lines: string list) =
+    match lines with
+    | [] -> []
+    | s::rest ->
+        match s |> ParseArgs.Init with
+        | BlankLine((), End) ->
+            (Line { indent = None; txt = s; ordinal = ordinal }) ::(parseLines (ordinal+1) rest)
+        | Parse.DocCommentLine(comment, End) ->
+            (Line { indent = None; txt = s; ordinal = ordinal })::(parseLines (ordinal+1) rest)
+        | Parse.FunctionDeclaration(funcName, _) ->
+            (Line { indent = Some (s |> indentation); txt = s; ordinal = ordinal })::(parseLines (ordinal+1) rest)
+        | Parse.Module(m, Any(txt, End)) ->
+            let inside = (parseLines (ordinal+1) rest) // this is wrong signature, need a way to partially parse.
+            // use the indentation of the first real content inside
+            let indent = inside |> Seq.tryPick(function Line l -> l.indent | Module (_, l, _) -> l.indent)
+            (Element.Module (m, { indent = indent; txt = s; ordinal = ordinal }, (parseLines (ordinal+1) rest)))::[] // This is wrong, next module shouldn't be inside
+        | _ ->
+            (Line { indent = Some (s |> indentation); txt = s; ordinal = ordinal })::(parseLines (ordinal+1) rest)
+
+let debug1 =
+    System.IO.File.ReadAllLines @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\foo.fsi"
+    |> List.ofArray
+    |> parseLines 0
+
 let scanFile filePath =
     let(|Regex|_|) pattern input =
         match RegularExpressions.Regex.Match(input, pattern, RegularExpressions.RegexOptions.IgnoreCase) with
@@ -269,7 +299,6 @@ let scanFile filePath =
     //let filePath = @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\foo.fsi"
     let output = new StringWriter()
     let lines = IO.File.ReadAllLines filePath
-    let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
     let getModules lines =
         let rec recur (modules, module', moduleLines, indentLevel) = function
         | [] ->
