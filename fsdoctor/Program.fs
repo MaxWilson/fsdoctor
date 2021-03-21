@@ -267,22 +267,19 @@ type Element =
     | Module of name: string * line: Line * contents: Element list
 let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
 let parseLines (lines: string list) =
-    let (|BlankOrComment|_|) ordinal s =
-        match s |> ParseArgs.Init with
-        | Parse.BlankLine((), End)
-        | Parse.DocCommentLine(_, End) ->
-                Some(Line { indent = None; txt = s; ordinal = ordinal })
-        | _ -> None
+    let (|BlankOrComment|_|) (ordinal, indent) = function
+        | [] -> None
+        | s::rest ->
+            match s |> ParseArgs.Init with
+            | Parse.BlankLine((), End)
+            | Parse.DocCommentLine(_, End) ->
+                    Some(Line { indent = None; txt = s; ordinal = ordinal }, rest, (ordinal+1, indent))
+            | _ -> None
 
     let rec (|Recur|_|) (ordinal, indent: int option) =
         match lines with
-        | [] -> []
-        | s::rest ->
-            match s |> ParseArgs.Init with
-            | BlankLine((), End) ->
-                (Line { indent = None; txt = s; ordinal = ordinal })::(parseLines (ordinal+1) rest)
-            | Parse.DocCommentLine(comment, End) ->
-                (Line { indent = None; txt = s; ordinal = ordinal })::(parseLines (ordinal+1) rest)
+            | BlankOrComment (ordinal, indent) (line, rest, oi) ->
+                Some(line, rest, oi)
             | _ ->
                 match (s |> indentation), indent with
                 | current, Some standard when current < standard ->
