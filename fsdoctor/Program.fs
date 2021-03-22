@@ -265,21 +265,48 @@ type Line = { indent: int option; txt: string; ordinal: int }
 type Element =
     | Line of Line
     | Module of name: string * line: Line * contents: Element list
+    | FunctionDeclaration of name: string
 let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
 let parseLines (lines: string list) =
-    let (|BlankOrComment|_|) (ordinal, indent) = function
-        | [] -> None
-        | s::rest ->
-            match s |> ParseArgs.Init with
+    let (|BlankOrComment|_|) = function
+        | ordinal, indent, [] -> None
+        | ordinal, indent, line::rest ->
+            match line |> ParseArgs.Init with
             | Parse.BlankLine((), End)
             | Parse.DocCommentLine(_, End) ->
-                    Some(Line { indent = None; txt = s; ordinal = ordinal }, rest, (ordinal+1, indent))
+                    Some(Line { indent = None; txt = line; ordinal = ordinal }, (ordinal+1, indent, rest))
+            | _ -> None
+    let (|IndentedLine|_|) = function
+        | (ordinal, indent, line::rest) as args when indentation line > indent ->
+            Some(args)
+        | _ -> None
+    let rec (|ModuleImplementation|_|) = function
+        | BlankOrComment(line, rest) ->
+            match rest with
+            | ModuleImplementation(more, rest) ->
+                Some(line::more, rest)
+            | _ ->
+                Some([line], rest)
+        | IndentedLine (ordinal, indent, line::tail) as rest ->
+            match line |> ParseArgs.Init with
+            | Parse.FunctionDeclaration(funcName, _) ->
+                let func = Line { indent = Some (s |> indentation); txt = s; ordinal = ordinal }
+        | _ ->
+            None
+    let (|Module|_|) = function
+        | ordinal, indent, (line::rest) ->
+            match line |> ParseArgs.Init with
+            | Parse.Module(m, _) ->
+                match (ordinal, indent, rest) with
+                | ModuleImplementation(lines, rest) ->
+                    Some(Element.Module (m, { indent = None; txt = line; ordinal = ordinal }, lines), rest)
+                | _ -> None
             | _ -> None
 
     let rec (|Recur|_|) (ordinal, indent: int option) =
-        match lines with
-            | BlankOrComment (ordinal, indent) (line, rest, oi) ->
-                Some(line, rest, oi)
+        match (ordinal, indent, lines) with
+            | BlankOrComment ctx ->
+                Some(line, ctx)
             | _ ->
                 match (s |> indentation), indent with
                 | current, Some standard when current < standard ->
@@ -298,8 +325,9 @@ let parseLines (lines: string list) =
     recur (1, None)
 
 let debug1 =
-    System.IO.File.ReadAllLines @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\foo.fsi"
-    |> List.ofArray
+    //System.IO.File.ReadAllLines @"c:\code\fsharp-core-docs\fsharp\src\fsharp\FSharp.Core\foo.fsi"
+    //|> List.ofArray
+    examples
     |> parseLines
 
 let scanFile filePath =
