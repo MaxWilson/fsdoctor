@@ -261,11 +261,12 @@ let getExamples apiName examples =
     examples
 
 open Parse
-type Line = { indent: int option; txt: string; ordinal: int }
+type Line = { txt: string; ordinal: int }
 type Element =
     | Line of Line
     | Module of name: string * line: Line * contents: Element list
-    | FunctionDeclaration of name: string
+    | FunctionDeclaration of name: string * contents: Element list
+    | Example of Line list
 let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
 let parseLines (lines: string list) =
     let (|BlankOrComment|_|) = function
@@ -274,11 +275,13 @@ let parseLines (lines: string list) =
             match line |> ParseArgs.Init with
             | Parse.BlankLine((), End)
             | Parse.DocCommentLine(_, End) ->
-                    Some(Line { indent = None; txt = line; ordinal = ordinal }, (ordinal+1, indent, rest))
+                    Some(Line { txt = line; ordinal = ordinal }, (ordinal+1, indent, rest))
             | _ -> None
     let (|IndentedLine|_|) = function
-        | (ordinal, indent, line::rest) as args when indentation line > indent ->
+        | (ordinal, Some indent, line::rest) as args when indentation line > indent ->
             Some(args)
+        | (ordinal, None, line::rest) ->
+            Some(ordinal, Some (indentation line), line::rest)
         | _ -> None
     let rec (|ModuleImplementation|_|) = function
         | BlankOrComment(line, rest) ->
@@ -290,7 +293,11 @@ let parseLines (lines: string list) =
         | IndentedLine (ordinal, indent, line::tail) as rest ->
             match line |> ParseArgs.Init with
             | Parse.FunctionDeclaration(funcName, _) ->
-                let func = Line { indent = Some (s |> indentation); txt = s; ordinal = ordinal }
+                let func = Line { txt = line; ordinal = ordinal }
+
+                None
+            | _ ->
+                None
         | _ ->
             None
     let (|Module|_|) = function
@@ -299,7 +306,7 @@ let parseLines (lines: string list) =
             | Parse.Module(m, _) ->
                 match (ordinal, indent, rest) with
                 | ModuleImplementation(lines, rest) ->
-                    Some(Element.Module (m, { indent = None; txt = line; ordinal = ordinal }, lines), rest)
+                    Some(Element.Module (m, { txt = line; ordinal = ordinal }, lines), rest)
                 | _ -> None
             | _ -> None
 
