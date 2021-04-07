@@ -265,23 +265,23 @@ type Line = { txt: string; ordinal: int }
 type Element =
     | Line of Line
     | Module of name: string * line: Line * contents: Element list
-    | FunctionDeclaration of name: string * contents: Element list
+    | FunctionDeclaration of name: string * comment: Line option * contents: Element list
     | Example of Line list
 let indentation (line: string) = line.ToCharArray() |> Array.takeWhile (Char.IsWhiteSpace) |> Array.length
 let parseLines (lines: string list) =
     let (|BlankOrComment|_|) = function
-        | ordinal, indent, [] -> None
-        | ordinal, indent, line::rest ->
+        | ordinal, indent, currentDoc, [] -> None
+        | ordinal, indent, currentDoc, line::rest ->
             match line |> ParseArgs.Init with
             | Parse.BlankLine((), End)
             | Parse.DocCommentLine(_, End) ->
-                    Some(Line { txt = line; ordinal = ordinal }, (ordinal+1, indent, rest))
+                    Some(Line { txt = line; ordinal = ordinal }, (ordinal+1, indent, (Some ({ txt = line; ordinal = ordinal })), rest))
             | _ -> None
     let (|IndentedLine|_|) = function
-        | (ordinal, Some indent, line::rest) as args when indentation line > indent ->
+        | (ordinal, Some indent, _, line::rest) as args when indentation line > indent ->
             Some(args)
-        | (ordinal, None, line::rest) ->
-            Some(ordinal, Some (indentation line), line::rest)
+        | (ordinal, None, currentDoc, line::rest) ->
+            Some(ordinal, Some (indentation line), currentDoc, line::rest)
         | _ -> None
     let rec (|ModuleImplementation|_|) = function
         | BlankOrComment(line, rest) ->
@@ -290,12 +290,18 @@ let parseLines (lines: string list) =
                 Some(line::more, rest)
             | _ ->
                 Some([line], rest)
-        | IndentedLine (ordinal, indent, line::tail) as rest ->
+        | IndentedLine (ordinal, indent, doc, line::tail) ->
             match line |> ParseArgs.Init with
             | Parse.FunctionDeclaration(funcName, _) ->
-                let func = Line { txt = line; ordinal = ordinal }
-
-                None
+                match (ordinal, indent |> Option.map ((+)1), None, tail) with
+                | ModuleImplementation(lines, rest) ->
+                    let func = Element.FunctionDeclaration(funcName, doc, lines)
+                    match rest with
+                    | ModuleImplementation(more, rest) ->
+                        Some(func::more, rest)
+                    | _ -> Some([func], rest)
+                | _ ->
+                    None
             | _ ->
                 None
         | _ ->
